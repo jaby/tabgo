@@ -1,7 +1,9 @@
 package cmd
 
 import (
-	"fmt"
+	"github.com/jaby/tabgo/tableau"
+	"log"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -18,7 +20,24 @@ var publishCmd = &cobra.Command{
 	Use:   "publish",
 	Short: "Publishes a datasource (file-extension: tds or tdsx) or a workbook (twb or twbx) to tableau ",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("publish called")
+		tabl := tableau.TabGo{ServerURL: tablServerURL, ApiVersion: "3.6"}
+		err := tabl.Signin(tablUsername, tablPassword, tablSite)
+		if err != nil {
+			log.Fatalf("unable to signin, error: %+v", err)
+		}
+
+		startUpload := time.Now()
+		log.Printf(">>>>  start upload %s ", tablDocument)
+		_, err = tabl.PublishDocument(tablDocument, tablProjectName)
+		if err != nil {
+			log.Fatalf("can not publish workbook '%s' to project '%s' on site '%s',\nError: %+v ", tablDocument, tablProjectName, tablSite, err)
+		}
+		log.Printf(">>>>  upload of %s took: %s", tablDocument, time.Now().Sub(startUpload))
+
+		err = tabl.Signout()
+		if err != nil {
+			log.Fatalf("unable to signout")
+		}
 	},
 }
 
