@@ -182,7 +182,7 @@ func (tabl *TabGo) Signout() error {
 
 	req, err := http.NewRequest("POST", fmt.Sprintf("%s/auth/signout", tabl.ApiURL()), nil)
 	if err != nil {
-		errors.Wrapf(err, "can not post")
+		return errors.Wrapf(err, "can not post")
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
@@ -219,14 +219,14 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string) (TsResponse
 		tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
 		return uploadFile("request_payload", "text/xml", tsRequest, "tableau_workbook", documentPath,
 			fmt.Sprintf("%s/sites/%s/workbooks?workbookType=%s&overwrite=true", tabl.ApiURL(), tabl.CurrentSiteID, documentExtension),
-			tabl.CurrentToken,
-			map[string]string{})
+			documentExtension,
+			tabl.CurrentToken)
 	case "tds", "tdsx":
 		tsRequest := fmt.Sprintf(`<tsRequest><datasource name="%s"><project id="%s"/></datasource></tsRequest>`, documentName, projectID)
 		return uploadFile("request_payload", "text/xml", tsRequest, "tableau_datasource", documentPath,
-			fmt.Sprintf("%s/sites/%s/datasources?datasourceType=%s&overwrite=true", tabl.ApiURL(), tabl.CurrentSiteID),
-			tabl.CurrentToken,
-			map[string]string{})
+			fmt.Sprintf("%s/sites/%s/datasources?datasourceType=%s&overwrite=true", tabl.ApiURL(), tabl.CurrentSiteID, documentExtension),
+			documentExtension,
+			tabl.CurrentToken)
 	default:
 		return tsResponse, fmt.Errorf("invalid document extension '', expecting one of 'tds', 'tdsx', 'twb', 'twbx'")
 	}
@@ -248,7 +248,7 @@ func (tabl *TabGo) GetProjectID(projectName string) (string, error) {
 	uri := fmt.Sprintf("%s/sites/%s/projects?pageSize=%d&pageNumber=%d", tabl.ApiURL(), tabl.CurrentSiteID, pageSize, pageNum)
 	req, err := http.NewRequest("GET", uri, nil)
 	if err != nil {
-		errors.Wrapf(err, "can not post")
+		return projectID, errors.Wrapf(err, "can not post")
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
@@ -260,7 +260,7 @@ func (tabl *TabGo) GetProjectID(projectName string) (string, error) {
 		return projectID, errors.Wrapf(err, "can not client.Do(request) to get ProjectID from tableau")
 	}
 
-	body, _ := ioutil.ReadAll(resp.Body)
+	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return projectID, errors.Wrapf(err, "can not read response body")
 	}
@@ -279,7 +279,7 @@ func (tabl *TabGo) GetProjectID(projectName string) (string, error) {
 	return projectID, fmt.Errorf("project '%s' can not be found on this site", projectName)
 }
 
-func uploadFile(payloadFieldName, payloadContentType, payloadContent, fileFieldName, filePath, uri string, tablToken string, extraParams map[string]string) (TsResponse, error) {
+func uploadFile(payloadFieldName, payloadContentType, payloadContent, fileFieldName, filePath, uri string, documentExtension string, tablToken string) (TsResponse, error) {
 
 	var tsResponse TsResponse
 	r, w := io.Pipe()
@@ -326,6 +326,9 @@ func uploadFile(payloadFieldName, payloadContentType, payloadContent, fileFieldN
 
 	// post the request
 	req, err := http.NewRequest("POST", uri, r)
+	if err != nil {
+		return tsResponse, errors.Wrapf(err, "can not http.NewRequest")
+	}
 	req.Header.Set("Content-Type", fmt.Sprintf("multipart/mixed; boundary=%s", m.Boundary()))
 	req.Header.Set("x-tableau-auth", tablToken)
 
