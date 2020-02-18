@@ -1,18 +1,3 @@
-/*
-Copyright © 2020 NAME HERE <EMAIL ADDRESS>
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
 package cmd
 
 import (
@@ -21,16 +6,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var tablDocument string
+var tablServerURL string
+var tablUsername string
+var tablPassword string
+var tablSite string
+var tablProjectName string
+
 // publishCmd represents the publish command
 var publishCmd = &cobra.Command{
 	Use:   "publish",
-	Short: "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+	Short: "Publishes a datasource (file-extension: tds or tdsx) or a workbook (twb or twbx) to tableau ",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("publish called")
 	},
@@ -39,13 +25,21 @@ to quickly create a Cobra application.`,
 func init() {
 	rootCmd.AddCommand(publishCmd)
 
-	// Here you will define your flags and configuration settings.
+	publishCmd.Flags().StringVarP(&tablDocument, "document", "d", "", "tableau document to publish, should have file-extension *.tds(x) for datasource or *twb(x) for workbook")
+	publishCmd.MarkFlagRequired("document")
 
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// publishCmd.PersistentFlags().String("foo", "", "A help for foo")
+	publishCmd.Flags().StringVarP(&tablServerURL, "url", "u", "", "tableau server URL")
+	publishCmd.MarkFlagRequired("url")
 
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// publishCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	publishCmd.Flags().StringVarP(&tablUsername, "username", "n", "", "tableau username")
+	publishCmd.MarkFlagRequired("username")
+
+	publishCmd.Flags().StringVarP(&tablPassword, "password", "x", "", "tableau password")
+	publishCmd.MarkFlagRequired("password")
+
+	publishCmd.Flags().StringVarP(&tablSite, "site", "s", "", "tableau site")
+	publishCmd.MarkFlagRequired("site")
+
+	publishCmd.Flags().StringVarP(&tablProjectName, "project", "p", "", "tableau project within site")
+	publishCmd.MarkFlagRequired("project")
 }
