@@ -30,7 +30,7 @@ var publishCmd = &cobra.Command{
 		log.Printf(">>>>  start upload %s ", tablDocument)
 		_, err = tabl.PublishDocument(tablDocument, tablProjectName)
 		if err != nil {
-			log.Fatalf("can not publish workbook '%s' to project '%s' on site '%s',\nError: %+v ", tablDocument, tablProjectName, tablSite, err)
+			log.Fatalf("can not publish '%s' to project '%s' on site '%s',\nError: %+v ", tablDocument, tablProjectName, tablSite, err)
 		}
 		log.Printf(">>>>  upload of %s took: %s", tablDocument, time.Now().Sub(startUpload))
 

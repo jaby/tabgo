@@ -216,9 +216,15 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string) (TsResponse
 
 	switch documentExtension {
 	case "twb", "twbx":
-		tsRequestWorkbook := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
-		return uploadFile("request_payload", "text/xml", tsRequestWorkbook, "tableau_workbook", documentPath,
+		tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
+		return uploadFile("request_payload", "text/xml", tsRequest, "tableau_workbook", documentPath,
 			fmt.Sprintf("%s/sites/%s/workbooks?workbookType=%s&overwrite=true", tabl.ApiURL(), tabl.CurrentSiteID, documentExtension),
+			tabl.CurrentToken,
+			map[string]string{})
+	case "tds", "tdsx":
+		tsRequest := fmt.Sprintf(`<tsRequest><datasource name="%s"><project id="%s"/></datasource></tsRequest>`, documentName, projectID)
+		return uploadFile("request_payload", "text/xml", tsRequest, "tableau_datasource", documentPath,
+			fmt.Sprintf("%s/sites/%s/datasources?datasourceType=%s&overwrite=true", tabl.ApiURL(), tabl.CurrentSiteID),
 			tabl.CurrentToken,
 			map[string]string{})
 	default:
