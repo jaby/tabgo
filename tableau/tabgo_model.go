@@ -216,17 +216,32 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string) (TsResponse
 
 	switch documentExtension {
 	case "twb", "twbx":
-		tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
+		//tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
+
+		tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><connections><connection serverAddress="is005vs03008.dev.ilias.local" serverPort='443'><connectionCredentials name="ilias20201_dev" password="ilias20201_dev" embed="true" /></connection></connections><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
+
 		return uploadFile("request_payload", "text/xml", tsRequest, "tableau_workbook", documentPath,
 			fmt.Sprintf("%s/sites/%s/workbooks?workbookType=%s&overwrite=true", tabl.ApiURL(), tabl.CurrentSiteID, documentExtension),
 			documentExtension,
 			tabl.CurrentToken)
 	case "tds", "tdsx":
+		// Following works, but does not embed connection password
 		tsRequest := fmt.Sprintf(`<tsRequest><datasource name="%s"><project id="%s"/></datasource></tsRequest>`, documentName, projectID)
+
+		//// Following works, but is not sufficient i we have multiple connections:
+		//tsRequest := fmt.Sprintf(`<tsRequest><datasource name="%s"><connectionCredentials name="ilias20201_dev" password="ilias20201_dev" embed="true" /><project id="%s" /></datasource></tsRequest>`, documentName, projectID)
+
+		//// This does not work, why?
+		//tsRequest := fmt.Sprintf(`<tsRequest><connection serverAddress="(DESCRIPTION=(ADDRESS=(PROTOCOL=tcp)(HOST=IS005VS03039.dev.ilias.local) (PORT=1521))(CONNECT_DATA=(SID=TATOOINE)))" userName="ilias20201_dev" password="ilias20201_dev" embedPassword="true" /><datasource name="%s"><project id="%s"/></datasource></tsRequest>`, documentName, projectID)
+
+		//// This does not work, why?
+		//tsRequest := fmt.Sprintf(`<tsRequest><connections><connection serverAddress="(DESCRIPTION=(ADDRESS=(PROTOCOL=tcp)(HOST=IS005VS03039.dev.ilias.local) (PORT=1521))(CONNECT_DATA=(SID=TATOOINE)))"><connectionCredentials name="ilias20201_dev" password="ilias20201_dev" embed="true" /></connection></connections><datasource name="%s"><project id="%s"/></datasource></tsRequest>`, documentName, projectID)
+
 		return uploadFile("request_payload", "text/xml", tsRequest, "tableau_datasource", documentPath,
 			fmt.Sprintf("%s/sites/%s/datasources?datasourceType=%s&overwrite=true", tabl.ApiURL(), tabl.CurrentSiteID, documentExtension),
 			documentExtension,
-			tabl.CurrentToken)
+			tabl.CurrentToken,
+		)
 	default:
 		return tsResponse, fmt.Errorf("invalid document extension '', expecting one of 'tds', 'tdsx', 'twb', 'twbx'")
 	}
