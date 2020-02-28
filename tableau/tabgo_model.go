@@ -218,6 +218,8 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string) (TsResponse
 	case "twb", "twbx":
 		//tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
 
+		//tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><connections><connection serverAddress="is005vs03008.dev.ilias.local" serverPort='443'><connectionCredentials name="ilias20201_dev" password="ilias20201_dev" embed="true" /></connection></connections><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
+
 		tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><connections><connection serverAddress="is005vs03008.dev.ilias.local" serverPort='443'><connectionCredentials name="ilias20201_dev" password="ilias20201_dev" embed="true" /></connection></connections><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
 
 		return uploadFile("request_payload", "text/xml", tsRequest, "tableau_workbook", documentPath,
@@ -237,11 +239,98 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string) (TsResponse
 		//// This does not work, why?
 		//tsRequest := fmt.Sprintf(`<tsRequest><connections><connection serverAddress="(DESCRIPTION=(ADDRESS=(PROTOCOL=tcp)(HOST=IS005VS03039.dev.ilias.local) (PORT=1521))(CONNECT_DATA=(SID=TATOOINE)))"><connectionCredentials name="ilias20201_dev" password="ilias20201_dev" embed="true" /></connection></connections><datasource name="%s"><project id="%s"/></datasource></tsRequest>`, documentName, projectID)
 
-		return uploadFile("request_payload", "text/xml", tsRequest, "tableau_datasource", documentPath,
+		tsResponse, err := uploadFile("request_payload", "text/xml", tsRequest, "tableau_datasource", documentPath,
 			fmt.Sprintf("%s/sites/%s/datasources?datasourceType=%s&overwrite=true", tabl.ApiURL(), tabl.CurrentSiteID, documentExtension),
 			documentExtension,
 			tabl.CurrentToken,
 		)
+		if err != nil {
+			return tsResponse, errors.Wrapf(err, "can not upload datasource")
+		}
+
+		//req, err := http.NewRequest("GET", fmt.Sprintf("%s/sites/%s/datasources", tabl.ApiURL(), tabl.CurrentSiteID), nil) //=> datasources
+
+		datasourceId := "14443036-d84d-4a15-a2f8-f0066552e11f"
+		connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s/connections", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId)
+
+		req, err := http.NewRequest("GET", connectionURL, nil)
+		if err != nil {
+			return tsResponse, errors.Wrapf(err, "can not get")
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-tableau-auth", tabl.CurrentToken)
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			return tsResponse, errors.Wrapf(err, "can not client.Do(request) to sign out from tableau")
+		}
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return tsResponse, errors.Wrapf(err, "can not read response body")
+		}
+		_ = body
+
+		if strings.Contains(strings.ToLower(string(body)), "error") {
+			return tsResponse, fmt.Errorf("get datasource connections failed: %s", string(body))
+		}
+
+		type Connection struct {
+			ID            string `json:"id"`
+			Type          string `json:"type"`
+			EmbedPassword bool   `json:"embedPassword"`
+			ServerAddress string `json:"serverAddress"`
+			ServerPort    string `json:"serverPort"`
+			UserName      string `json:"userName"`
+		}
+
+		type DatasourceConnectionsHolder struct {
+			Connections struct {
+				Connection []Connection `json:"connection"`
+			} `json:"connections"`
+		}
+		dsConnections := DatasourceConnectionsHolder{}
+
+		err = json.NewDecoder(bytes.NewReader(body)).Decode(&dsConnections)
+		if err != nil {
+			return tsResponse, errors.Wrapf(err, "can not json decode")
+		}
+
+		passwords := map[string]string{"oracle": "ilias20192_dev", "sqlserver": "Dcm4ever!"}
+
+		for _, connection := range dsConnections.Connections.Connection {
+			connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s/connections/%s", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId, connection.ID)
+			payload := fmt.Sprintf(`<tsRequest><connection serverAddress="%s" serverPort="%s" userName="%s" password="%s" embedPassword="true" /></tsRequest>`,
+				connection.ServerAddress, connection.ServerPort, connection.UserName, passwords[connection.Type])
+			req, err := http.NewRequest("PUT", connectionURL, strings.NewReader(payload))
+			if err != nil {
+				return tsResponse, errors.Wrapf(err, "can not get")
+			}
+			req.Header.Set("Accept", "application/json")
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-tableau-auth", tabl.CurrentToken)
+
+			client := &http.Client{}
+			resp, err := client.Do(req)
+			if err != nil {
+				return tsResponse, errors.Wrapf(err, "can not client.Do(request) update connection")
+			}
+			body, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				return tsResponse, errors.Wrapf(err, "can not read response body")
+			}
+
+			if strings.Contains(strings.ToLower(string(body)), "error") {
+				return tsResponse, fmt.Errorf("get datasource connections failed: %s", string(body))
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				return TsResponse{}, fmt.Errorf("expected success response %s, but got %s: %s", http.StatusOK, resp.StatusCode, body)
+			}
+		}
+
+		return tsResponse, nil
 	default:
 		return tsResponse, fmt.Errorf("invalid document extension '', expecting one of 'tds', 'tdsx', 'twb', 'twbx'")
 	}
