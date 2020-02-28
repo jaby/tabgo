@@ -120,6 +120,15 @@ type TsResponse struct {
 	} `xml:"workbook"`
 }
 
+type Connection struct {
+	ID            string `json:"id"`
+	Type          string `json:"type"`
+	EmbedPassword bool   `json:"embedPassword"`
+	ServerAddress string `json:"serverAddress"`
+	ServerPort    string `json:"serverPort"`
+	UserName      string `json:"userName"`
+}
+
 func (tabl *TabGo) ApiURL() string {
 	return fmt.Sprintf("%s/api/%s", tabl.ServerURL, tabl.ApiVersion)
 }
@@ -216,11 +225,11 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string) (TsResponse
 
 	switch documentExtension {
 	case "twb", "twbx":
-		//tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
+		tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
 
 		//tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><connections><connection serverAddress="is005vs03008.dev.ilias.local" serverPort='443'><connectionCredentials name="ilias20201_dev" password="ilias20201_dev" embed="true" /></connection></connections><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
 
-		tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><connections><connection serverAddress="is005vs03008.dev.ilias.local" serverPort='443'><connectionCredentials name="ilias20201_dev" password="ilias20201_dev" embed="true" /></connection></connections><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
+		//tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><connections><connection serverAddress="is005vs03008.dev.ilias.local" serverPort='443'><connectionCredentials name="ilias20201_dev" password="ilias20201_dev" embed="true" /></connection></connections><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
 
 		return uploadFile("request_payload", "text/xml", tsRequest, "tableau_workbook", documentPath,
 			fmt.Sprintf("%s/sites/%s/workbooks?workbookType=%s&overwrite=true", tabl.ApiURL(), tabl.CurrentSiteID, documentExtension),
@@ -251,64 +260,27 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string) (TsResponse
 		//req, err := http.NewRequest("GET", fmt.Sprintf("%s/sites/%s/datasources", tabl.ApiURL(), tabl.CurrentSiteID), nil) //=> datasources
 
 		datasourceId := "14443036-d84d-4a15-a2f8-f0066552e11f"
-		connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s/connections", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId)
-
-		req, err := http.NewRequest("GET", connectionURL, nil)
-		if err != nil {
-			return tsResponse, errors.Wrapf(err, "can not get")
-		}
-		req.Header.Set("Accept", "application/json")
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-tableau-auth", tabl.CurrentToken)
-
-		client := &http.Client{}
-		resp, err := client.Do(req)
-		if err != nil {
-			return tsResponse, errors.Wrapf(err, "can not client.Do(request) to sign out from tableau")
-		}
-		body, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			return tsResponse, errors.Wrapf(err, "can not read response body")
-		}
-		_ = body
-
-		if strings.Contains(strings.ToLower(string(body)), "error") {
-			return tsResponse, fmt.Errorf("get datasource connections failed: %s", string(body))
-		}
-
-		type Connection struct {
-			ID            string `json:"id"`
-			Type          string `json:"type"`
-			EmbedPassword bool   `json:"embedPassword"`
-			ServerAddress string `json:"serverAddress"`
-			ServerPort    string `json:"serverPort"`
-			UserName      string `json:"userName"`
-		}
-
-		type DatasourceConnectionsHolder struct {
-			Connections struct {
-				Connection []Connection `json:"connection"`
-			} `json:"connections"`
-		}
-		dsConnections := DatasourceConnectionsHolder{}
-
-		err = json.NewDecoder(bytes.NewReader(body)).Decode(&dsConnections)
-		if err != nil {
-			return tsResponse, errors.Wrapf(err, "can not json decode")
-		}
-
 		passwords := map[string]string{"oracle": "ilias20192_dev", "sqlserver": "Dcm4ever!"}
 
-		for _, connection := range dsConnections.Connections.Connection {
+		connections, err := tabl.DataSourceConnections(datasourceId)
+		if err != nil {
+			return tsResponse, errors.Wrapf(err, "can not get DataSourceConnections")
+		}
+
+		for _, connection := range connections {
 			connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s/connections/%s", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId, connection.ID)
-			payload := fmt.Sprintf(`<tsRequest><connection serverAddress="%s" serverPort="%s" userName="%s" password="%s" embedPassword="true" /></tsRequest>`,
-				connection.ServerAddress, connection.ServerPort, connection.UserName, passwords[connection.Type])
+			//connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId)
+			//payload := fmt.Sprintf(`<tsRequest><connection serverAddress="%s" serverPort="%s" userName="%s" password="%s" embedPassword="true" /></tsRequest>`,
+			//	connection.ServerAddress, connection.ServerPort, connection.UserName, passwords[connection.Type])
+			payload := fmt.Sprintf(`<tsRequest><connection serverAddress="%s" userName="%s" password="%s" embedPassword="true" /></tsRequest>`,
+				connection.ServerAddress, connection.UserName, passwords[connection.Type])
+
 			req, err := http.NewRequest("PUT", connectionURL, strings.NewReader(payload))
 			if err != nil {
 				return tsResponse, errors.Wrapf(err, "can not get")
 			}
-			req.Header.Set("Accept", "application/json")
-			req.Header.Set("Content-Type", "application/json")
+			//req.Header.Set("Accept", "text/xml")
+			req.Header.Set("Content-Type", "text/xml")
 			req.Header.Set("X-tableau-auth", tabl.CurrentToken)
 
 			client := &http.Client{}
@@ -335,6 +307,47 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string) (TsResponse
 		return tsResponse, fmt.Errorf("invalid document extension '', expecting one of 'tds', 'tdsx', 'twb', 'twbx'")
 	}
 
+}
+
+func (tabl *TabGo) DataSourceConnections(datasourceId string) ([]Connection, error) {
+	dsConnections := []Connection{}
+	connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s/connections", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId)
+
+	req, err := http.NewRequest("GET", connectionURL, nil)
+	if err != nil {
+		return dsConnections, errors.Wrapf(err, "can not get connections for datasource")
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-tableau-auth", tabl.CurrentToken)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return dsConnections, errors.Wrapf(err, "can not client.Do")
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return dsConnections, errors.Wrapf(err, "can not read response body")
+	}
+
+	if strings.Contains(strings.ToLower(string(body)), "error") {
+		return dsConnections, fmt.Errorf("get datasource connections failed: %s", string(body))
+	}
+
+	type DatasourceConnectionsHolder struct {
+		Connections struct {
+			Connection []Connection `json:"connection"`
+		} `json:"connections"`
+	}
+	datasourceConnectionsHolder := DatasourceConnectionsHolder{}
+
+	err = json.NewDecoder(bytes.NewReader(body)).Decode(&datasourceConnectionsHolder)
+	if err != nil {
+		return dsConnections, errors.Wrapf(err, "can not json decode response body: %s", string(body))
+	}
+	dsConnections = datasourceConnectionsHolder.Connections.Connection
+	return dsConnections, nil
 }
 
 func GetDocumentNameFromPath(fullpath string) (string, string) {
