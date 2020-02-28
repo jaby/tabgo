@@ -15,6 +15,14 @@ var tablPassword string
 var tablSite string
 var tablProjectName string
 
+type ExamplePasswordFinder struct {
+	passwords map[string]string
+}
+
+func (pf ExamplePasswordFinder) FindPassword(connection tableau.Connection) (string, error) {
+	return pf.passwords[connection.Type], nil
+}
+
 // publishCmd represents the publish command
 var publishCmd = &cobra.Command{
 	Use:   "publish",
@@ -26,9 +34,12 @@ var publishCmd = &cobra.Command{
 			log.Fatalf("unable to signin, error: %+v", err)
 		}
 
+		// create a passwordFinder cfr tableau.PasswordFinder interface, this is just a very basic example implementation
+		myPasswordFinder := ExamplePasswordFinder{passwords: map[string]string{"oracle": "ilias20192_dev", "sqlserver": "Dcm4ever!"}}
+
 		startUpload := time.Now()
 		log.Printf(">>>>  start upload %s ", tablDocument)
-		_, err = tabl.PublishDocument(tablDocument, tablProjectName)
+		_, err = tabl.PublishDocument(tablDocument, tablProjectName, myPasswordFinder)
 		if err != nil {
 			log.Fatalf("can not publish '%s' to project '%s' on site '%s',\nError: %+v ", tablDocument, tablProjectName, tablSite, err)
 		}

@@ -81,7 +81,31 @@ type TsResponse struct {
 	Xmlns          string   `xml:"xmlns,attr"`
 	Xsi            string   `xml:"xsi,attr"`
 	SchemaLocation string   `xml:"schemaLocation,attr"`
-	Workbook       struct {
+	Datasource     struct {
+		Text                string `xml:",chardata"`
+		CertificationNote   string `xml:"certificationNote,attr"`
+		ContentUrl          string `xml:"contentUrl,attr"`
+		CreatedAt           string `xml:"createdAt,attr"`
+		EncryptExtracts     string `xml:"encryptExtracts,attr"`
+		ID                  string `xml:"id,attr"`
+		IsCertified         string `xml:"isCertified,attr"`
+		Name                string `xml:"name,attr"`
+		Type                string `xml:"type,attr"`
+		UpdatedAt           string `xml:"updatedAt,attr"`
+		UseRemoteQueryAgent string `xml:"useRemoteQueryAgent,attr"`
+		WebpageUrl          string `xml:"webpageUrl,attr"`
+		Project             struct {
+			Text string `xml:",chardata"`
+			ID   string `xml:"id,attr"`
+			Name string `xml:"name,attr"`
+		} `xml:"project"`
+		Owner struct {
+			Text string `xml:",chardata"`
+			ID   string `xml:"id,attr"`
+		} `xml:"owner"`
+		Tags string `xml:"tags"`
+	} `xml:"datasource"`
+	Workbook struct {
 		Text            string `xml:",chardata"`
 		ID              string `xml:"id,attr"`
 		Name            string `xml:"name,attr"`
@@ -127,6 +151,10 @@ type Connection struct {
 	ServerAddress string `json:"serverAddress"`
 	ServerPort    string `json:"serverPort"`
 	UserName      string `json:"userName"`
+}
+
+type PasswordFinder interface {
+	FindPassword(connection Connection) (string, error)
 }
 
 func (tabl *TabGo) ApiURL() string {
@@ -214,7 +242,7 @@ func (tabl *TabGo) Signout() error {
 }
 
 // cfr https://help.tableau.com/current/api/rest_api/en-us/REST/rest_api_concepts_publish.htm
-func (tabl *TabGo) PublishDocument(documentPath, projectName string) (TsResponse, error) {
+func (tabl *TabGo) PublishDocument(documentPath, projectName string, passwordFinder PasswordFinder) (TsResponse, error) {
 
 	var tsResponse TsResponse
 	documentName, documentExtension := GetDocumentNameFromPath(documentPath)
@@ -259,8 +287,7 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string) (TsResponse
 
 		//req, err := http.NewRequest("GET", fmt.Sprintf("%s/sites/%s/datasources", tabl.ApiURL(), tabl.CurrentSiteID), nil) //=> datasources
 
-		datasourceId := "14443036-d84d-4a15-a2f8-f0066552e11f"
-		passwords := map[string]string{"oracle": "ilias20192_dev", "sqlserver": "Dcm4ever!"}
+		datasourceId := tsResponse.Datasource.ID
 
 		connections, err := tabl.DataSourceConnections(datasourceId)
 		if err != nil {
@@ -268,7 +295,7 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string) (TsResponse
 		}
 
 		for _, connection := range connections {
-			err := tabl.EmbedDatasourceConnection(datasourceId, connection, passwords)
+			err := tabl.EmbedDatasourceConnection(datasourceId, connection, passwordFinder)
 			if err != nil {
 				return tsResponse, errors.Wrapf(err, "can not embed datasource connection")
 			}
@@ -281,13 +308,19 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string) (TsResponse
 
 }
 
-func (tabl *TabGo) EmbedDatasourceConnection(datasourceId string, connection Connection, passwords map[string]string) error {
+func (tabl *TabGo) EmbedDatasourceConnection(datasourceId string, connection Connection, pwFinder PasswordFinder) error {
 	connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s/connections/%s", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId, connection.ID)
 	//connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId)
 	//payload := fmt.Sprintf(`<tsRequest><connection serverAddress="%s" serverPort="%s" userName="%s" password="%s" embedPassword="true" /></tsRequest>`,
 	//	connection.ServerAddress, connection.ServerPort, connection.UserName, passwords[connection.Type])
+
+	password, err := pwFinder.FindPassword(connection)
+	if err != nil {
+		return errors.Wrapf(err, "can not find password for connection: %+v", connection)
+	}
+
 	payload := fmt.Sprintf(`<tsRequest><connection serverAddress="%s" userName="%s" password="%s" embedPassword="true" /></tsRequest>`,
-		connection.ServerAddress, connection.UserName, passwords[connection.Type])
+		connection.ServerAddress, connection.UserName, password)
 
 	req, err := http.NewRequest("PUT", connectionURL, strings.NewReader(payload))
 	if err != nil {
