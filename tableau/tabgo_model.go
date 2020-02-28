@@ -268,37 +268,9 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string) (TsResponse
 		}
 
 		for _, connection := range connections {
-			connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s/connections/%s", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId, connection.ID)
-			//connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId)
-			//payload := fmt.Sprintf(`<tsRequest><connection serverAddress="%s" serverPort="%s" userName="%s" password="%s" embedPassword="true" /></tsRequest>`,
-			//	connection.ServerAddress, connection.ServerPort, connection.UserName, passwords[connection.Type])
-			payload := fmt.Sprintf(`<tsRequest><connection serverAddress="%s" userName="%s" password="%s" embedPassword="true" /></tsRequest>`,
-				connection.ServerAddress, connection.UserName, passwords[connection.Type])
-
-			req, err := http.NewRequest("PUT", connectionURL, strings.NewReader(payload))
+			err := tabl.EmbedDatasourceConnection(datasourceId, connection, passwords)
 			if err != nil {
-				return tsResponse, errors.Wrapf(err, "can not get")
-			}
-			//req.Header.Set("Accept", "text/xml")
-			req.Header.Set("Content-Type", "text/xml")
-			req.Header.Set("X-tableau-auth", tabl.CurrentToken)
-
-			client := &http.Client{}
-			resp, err := client.Do(req)
-			if err != nil {
-				return tsResponse, errors.Wrapf(err, "can not client.Do(request) update connection")
-			}
-			body, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				return tsResponse, errors.Wrapf(err, "can not read response body")
-			}
-
-			if strings.Contains(strings.ToLower(string(body)), "error") {
-				return tsResponse, fmt.Errorf("get datasource connections failed: %s", string(body))
-			}
-
-			if resp.StatusCode != http.StatusOK {
-				return TsResponse{}, fmt.Errorf("expected success response %s, but got %s: %s", http.StatusOK, resp.StatusCode, body)
+				return tsResponse, errors.Wrapf(err, "can not embed datasource connection")
 			}
 		}
 
@@ -307,6 +279,42 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string) (TsResponse
 		return tsResponse, fmt.Errorf("invalid document extension '', expecting one of 'tds', 'tdsx', 'twb', 'twbx'")
 	}
 
+}
+
+func (tabl *TabGo) EmbedDatasourceConnection(datasourceId string, connection Connection, passwords map[string]string) error {
+	connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s/connections/%s", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId, connection.ID)
+	//connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId)
+	//payload := fmt.Sprintf(`<tsRequest><connection serverAddress="%s" serverPort="%s" userName="%s" password="%s" embedPassword="true" /></tsRequest>`,
+	//	connection.ServerAddress, connection.ServerPort, connection.UserName, passwords[connection.Type])
+	payload := fmt.Sprintf(`<tsRequest><connection serverAddress="%s" userName="%s" password="%s" embedPassword="true" /></tsRequest>`,
+		connection.ServerAddress, connection.UserName, passwords[connection.Type])
+
+	req, err := http.NewRequest("PUT", connectionURL, strings.NewReader(payload))
+	if err != nil {
+		return errors.Wrapf(err, "can not get")
+	}
+	//req.Header.Set("Accept", "text/xml")
+	req.Header.Set("Content-Type", "text/xml")
+	req.Header.Set("X-tableau-auth", tabl.CurrentToken)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return errors.Wrapf(err, "can not client.Do(request)")
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return errors.Wrapf(err, "can not read response body")
+	}
+
+	if strings.Contains(strings.ToLower(string(body)), "error") {
+		return fmt.Errorf("get datasource connections failed: %s", string(body))
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("expected success response %s, but got %s: %s", http.StatusOK, resp.StatusCode, body)
+	}
+	return nil
 }
 
 func (tabl *TabGo) DataSourceConnections(datasourceId string) ([]Connection, error) {
