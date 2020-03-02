@@ -1,12 +1,11 @@
 package tableau
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"github.com/pkg/errors"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"io/ioutil"
 	"mime/multipart"
@@ -14,7 +13,11 @@ import (
 	"net/textproto"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+
+	"github.com/pkg/errors"
+	"golang.org/x/sync/errgroup"
 )
 
 // TabGo is the base implementation of the TableauApi command line in GoLang
@@ -151,10 +154,12 @@ type Connection struct {
 	ServerAddress string `json:"serverAddress"`
 	ServerPort    string `json:"serverPort"`
 	UserName      string `json:"userName"`
+	DbName        string `json:"dbName"`
+	PassWord      string `json:"password"`
 }
 
-type PasswordFinder interface {
-	FindPassword(connection Connection) (string, error)
+type ConnectionFinder interface {
+	FindConnection(caption string) (Connection, error)
 }
 
 func (tabl *TabGo) ApiURL() string {
@@ -242,39 +247,77 @@ func (tabl *TabGo) Signout() error {
 }
 
 // cfr https://help.tableau.com/current/api/rest_api/en-us/REST/rest_api_concepts_publish.htm
-func (tabl *TabGo) PublishDocument(documentPath, projectName string, passwordFinder PasswordFinder) (TsResponse, error) {
+func (tabl *TabGo) PublishDocument(documentPath, projectName string, targetConnectionFinder ConnectionFinder) (TsResponse, error) {
 
 	var tsResponse TsResponse
 	documentName, documentExtension := GetDocumentNameFromPath(documentPath)
 	projectID, err := tabl.GetProjectID(projectName)
 	if err != nil {
-		return tsResponse, err
+		return tsResponse, errors.Wrapf(err, "can not get project id")
+	}
+
+	// Response success
+
+	captionRe, err := regexp.Compile(`named-connection caption='([^']+)'`)
+	if err != nil {
+		return tsResponse, errors.Wrapf(err, "can not compile regex")
+	}
+
+	namedConnectionsRe, err := regexp.Compile(`(?s)(<named-connections>.*</named-connections>)`)
+	if err != nil {
+		return tsResponse, errors.Wrapf(err, "can not compile regex")
 	}
 
 	switch documentExtension {
 	case "twb", "twbx":
-		tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
+		var connections string
+		if documentExtension == "twbx" {
 
-		//tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><connections><connection serverAddress="is005vs03008.dev.ilias.local" serverPort='443'><connectionCredentials name="ilias20201_dev" password="ilias20201_dev" embed="true" /></connection></connections><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
+			// twbx is a zip containing twb files ...
+			tmpdir, err := ioutil.TempDir("", "twbx")
+			if err != nil {
+				return tsResponse, errors.Wrapf(err, "can not create tmp dir")
+			}
 
-		//tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true"><connections><connection serverAddress="is005vs03008.dev.ilias.local" serverPort='443'><connectionCredentials name="ilias20201_dev" password="ilias20201_dev" embed="true" /></connection></connections><project id="%s"/></workbook></tsRequest>`, documentName, projectID)
+			defer os.RemoveAll(tmpdir)
+
+			err = Unzip(documentPath, tmpdir)
+			if err != nil {
+				return tsResponse, errors.Wrapf(err, "can not unzip twbx")
+			}
+
+			var connections string
+			twbxFiles, err := ioutil.ReadDir(tmpdir)
+			if err != nil {
+				return tsResponse, errors.Wrapf(err, "can not read files from dir '%s'", tmpdir)
+			}
+			for _, fi := range twbxFiles {
+				if "twb" == filepath.Ext(fi.Name()) {
+					fileConnections, err := ConnectionLinesXml(filepath.Join(tmpdir, fi.Name()), tsResponse, captionRe, targetConnectionFinder)
+					if err != nil {
+						return tsResponse, errors.Wrapf(err, "can not get ConnectionLines")
+					}
+					connections += fileConnections
+				}
+			}
+
+		} else {
+			connections, err = ConnectionLinesXml(documentPath, tsResponse, captionRe, targetConnectionFinder)
+			if err != nil {
+				return tsResponse, errors.Wrapf(err, "can not get ConnectionLines")
+			}
+		}
+
+		tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true">%s<project id="%s"/></workbook></tsRequest>`, documentName, connections, projectID)
 
 		return uploadFile("request_payload", "text/xml", tsRequest, "tableau_workbook", documentPath,
 			fmt.Sprintf("%s/sites/%s/workbooks?workbookType=%s&overwrite=true", tabl.ApiURL(), tabl.CurrentSiteID, documentExtension),
 			documentExtension,
 			tabl.CurrentToken)
+
 	case "tds", "tdsx":
-		// Following works, but does not embed connection password
+		//// Following works, but does not embed connection password
 		tsRequest := fmt.Sprintf(`<tsRequest><datasource name="%s"><project id="%s"/></datasource></tsRequest>`, documentName, projectID)
-
-		//// Following works, but is not sufficient i we have multiple connections:
-		//tsRequest := fmt.Sprintf(`<tsRequest><datasource name="%s"><connectionCredentials name="ilias20201_dev" password="ilias20201_dev" embed="true" /><project id="%s" /></datasource></tsRequest>`, documentName, projectID)
-
-		//// This does not work, why?
-		//tsRequest := fmt.Sprintf(`<tsRequest><connection serverAddress="(DESCRIPTION=(ADDRESS=(PROTOCOL=tcp)(HOST=IS005VS03039.dev.ilias.local) (PORT=1521))(CONNECT_DATA=(SID=TATOOINE)))" userName="ilias20201_dev" password="ilias20201_dev" embedPassword="true" /><datasource name="%s"><project id="%s"/></datasource></tsRequest>`, documentName, projectID)
-
-		//// This does not work, why?
-		//tsRequest := fmt.Sprintf(`<tsRequest><connections><connection serverAddress="(DESCRIPTION=(ADDRESS=(PROTOCOL=tcp)(HOST=IS005VS03039.dev.ilias.local) (PORT=1521))(CONNECT_DATA=(SID=TATOOINE)))"><connectionCredentials name="ilias20201_dev" password="ilias20201_dev" embed="true" /></connection></connections><datasource name="%s"><project id="%s"/></datasource></tsRequest>`, documentName, projectID)
 
 		tsResponse, err := uploadFile("request_payload", "text/xml", tsRequest, "tableau_datasource", documentPath,
 			fmt.Sprintf("%s/sites/%s/datasources?datasourceType=%s&overwrite=true", tabl.ApiURL(), tabl.CurrentSiteID, documentExtension),
@@ -285,8 +328,6 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string, passwordFin
 			return tsResponse, errors.Wrapf(err, "can not upload datasource")
 		}
 
-		//req, err := http.NewRequest("GET", fmt.Sprintf("%s/sites/%s/datasources", tabl.ApiURL(), tabl.CurrentSiteID), nil) //=> datasources
-
 		datasourceId := tsResponse.Datasource.ID
 
 		connections, err := tabl.DataSourceConnections(datasourceId)
@@ -294,8 +335,24 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string, passwordFin
 			return tsResponse, errors.Wrapf(err, "can not get DataSourceConnections")
 		}
 
+		namedConnections, err := NamedConnections(documentPath, namedConnectionsRe)
+		if err != nil {
+			return tsResponse, errors.Wrapf(err, "can not get NamedConnections for '%s'", documentPath)
+		}
+
 		for _, connection := range connections {
-			err := tabl.EmbedDatasourceConnection(datasourceId, connection, passwordFinder)
+			var caption string
+			ok := false
+			connectionKey := fmt.Sprintf("%s|%s|%s|%s",
+				connection.Type,
+				connection.ServerAddress,
+				//connection.DbName,
+				connection.ServerPort,
+				connection.UserName)
+			if caption, ok = namedConnections[connectionKey]; !ok {
+				return tsResponse, errors.Wrapf(err, "no named connection '%+v' found in '%+v'", connection, namedConnections)
+			}
+			err := tabl.EmbedDatasourceConnection(datasourceId, connection, targetConnectionFinder, caption)
 			if err != nil {
 				return tsResponse, errors.Wrapf(err, "can not embed datasource connection")
 			}
@@ -308,19 +365,97 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string, passwordFin
 
 }
 
-func (tabl *TabGo) EmbedDatasourceConnection(datasourceId string, connection Connection, pwFinder PasswordFinder) error {
-	connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s/connections/%s", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId, connection.ID)
-	//connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId)
-	//payload := fmt.Sprintf(`<tsRequest><connection serverAddress="%s" serverPort="%s" userName="%s" password="%s" embedPassword="true" /></tsRequest>`,
-	//	connection.ServerAddress, connection.ServerPort, connection.UserName, passwords[connection.Type])
-
-	password, err := pwFinder.FindPassword(connection)
+func ConnectionLinesXml(documentPath string, tsResponse TsResponse, captionRe *regexp.Regexp, targetConnectionFinder ConnectionFinder) (string, error) {
+	documentContent, err := ioutil.ReadFile(documentPath)
 	if err != nil {
-		return errors.Wrapf(err, "can not find password for connection: %+v", connection)
+		return "", errors.Wrapf(err, "can not read content from '%s'", documentPath)
+	}
+
+	matches := captionRe.FindAllStringSubmatch(string(documentContent), -1)
+	connections := ""
+
+	for _, match := range matches {
+		caption := match[1]
+		targetConnection, err := targetConnectionFinder.FindConnection(caption)
+		if err != nil {
+			return "", errors.Wrapf(err, "can not find namedConnection with caption '%s'", caption)
+		}
+		connections += fmt.Sprintf(`<connection serverAddress="%s"><connectionCredentials name="%s" password="%s" embed="true" /></connection>`,
+			targetConnection.ServerAddress, targetConnection.UserName, targetConnection.PassWord)
+
+	}
+	if connections != "" {
+		return fmt.Sprintf("<connections>%s</connections>", connections), nil
+	}
+	return "", nil
+}
+
+// NamedConnections returns a map of Connections (as key) with the value being the caption of the named connection
+func NamedConnections(documentPath string, namedConnectionsRe *regexp.Regexp) (map[string]string, error) {
+	namedConnections := make(map[string]string)
+	documentContent, err := ioutil.ReadFile(documentPath)
+	if err != nil {
+		return namedConnections, errors.Wrapf(err, "can not read content from '%s'", documentPath)
+	}
+
+	matches := namedConnectionsRe.FindStringSubmatch(string(documentContent))
+
+	type NamedConnections struct {
+		XMLName         xml.Name `xml:"named-connections"`
+		Text            string   `xml:",chardata"`
+		NamedConnection []struct {
+			Text       string `xml:",chardata"`
+			Caption    string `xml:"caption,attr"`
+			Name       string `xml:"name,attr"`
+			Connection struct {
+				Text                 string `xml:",chardata"`
+				Authentication       string `xml:"authentication,attr"`
+				Class                string `xml:"class,attr"`
+				OneTimeSql           string `xml:"one-time-sql,attr"`
+				Port                 string `xml:"port,attr"`
+				Schema               string `xml:"schema,attr"`
+				Server               string `xml:"server,attr"`
+				ServerOauth          string `xml:"server-oauth,attr"`
+				Service              string `xml:"service,attr"`
+				Sslmode              string `xml:"sslmode,attr"`
+				Username             string `xml:"username,attr"`
+				WorkgroupAuthMode    string `xml:"workgroup-auth-mode,attr"`
+				Dbname               string `xml:"dbname,attr"`
+				MinimumDriverVersion string `xml:"minimum-driver-version,attr"`
+				OdbcNativeProtocol   string `xml:"odbc-native-protocol,attr"`
+			} `xml:"connection"`
+		} `xml:"named-connection"`
+	}
+
+	parsedNamedConnections := NamedConnections{}
+	err = xml.Unmarshal([]byte(matches[0]), &parsedNamedConnections)
+	if err != nil {
+		fmt.Printf("error: %v", err)
+		return namedConnections, errors.Wrapf(err, "can not unmarshall named connections from '%s'", string(documentContent))
+	}
+
+	for _, parsedNamedConnection := range parsedNamedConnections.NamedConnection {
+		namedConnections[fmt.Sprintf("%s|%s|%s|%s",
+			parsedNamedConnection.Connection.Class,
+			parsedNamedConnection.Connection.Server,
+			//parsedNamedConnection.Connection.Dbname,
+			parsedNamedConnection.Connection.Port,
+			parsedNamedConnection.Connection.Username)] = parsedNamedConnection.Caption
+	}
+
+	return namedConnections, nil
+}
+
+func (tabl *TabGo) EmbedDatasourceConnection(datasourceId string, connection Connection, pwFinder ConnectionFinder, caption string) error {
+	connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s/connections/%s", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId, connection.ID)
+
+	targetConnection, err := pwFinder.FindConnection(caption)
+	if err != nil {
+		return errors.Wrapf(err, "can not find the connection for caption '%s' ", caption)
 	}
 
 	payload := fmt.Sprintf(`<tsRequest><connection serverAddress="%s" userName="%s" password="%s" embedPassword="true" /></tsRequest>`,
-		connection.ServerAddress, connection.UserName, password)
+		targetConnection.ServerAddress, targetConnection.UserName, targetConnection.PassWord)
 
 	req, err := http.NewRequest("PUT", connectionURL, strings.NewReader(payload))
 	if err != nil {
@@ -529,4 +664,69 @@ func fileExists(filename string) bool {
 		return false
 	}
 	return !info.IsDir()
+}
+
+func Unzip(src, dest string) error {
+	dest = filepath.Clean(dest) + string(os.PathSeparator)
+
+	r, err := zip.OpenReader(src)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := r.Close(); err != nil {
+			panic(err)
+		}
+	}()
+
+	os.MkdirAll(dest, 0755)
+
+	// Closure to address file descriptors issue with all the deferred .Close() methods
+	extractAndWriteFile := func(f *zip.File) error {
+		path := filepath.Join(dest, f.Name)
+		// Check for ZipSlip: https://snyk.io/research/zip-slip-vulnerability
+		if !strings.HasPrefix(path, dest) {
+			return fmt.Errorf("%s: illegal file path", path)
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := rc.Close(); err != nil {
+				panic(err)
+			}
+		}()
+
+		if f.FileInfo().IsDir() {
+			os.MkdirAll(path, f.Mode())
+		} else {
+			os.MkdirAll(filepath.Dir(path), f.Mode())
+			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+			if err != nil {
+				return err
+			}
+			defer func() {
+				if err := f.Close(); err != nil {
+					panic(err)
+				}
+			}()
+
+			_, err = io.Copy(f, rc)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, f := range r.File {
+		err := extractAndWriteFile(f)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
