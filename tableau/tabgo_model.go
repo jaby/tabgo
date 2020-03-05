@@ -78,75 +78,6 @@ type Projects struct {
 	Projects []Project `json:"project,omitempty" xml:"project,omitempty"`
 }
 
-type TsResponse struct {
-	XMLName        xml.Name `xml:"tsResponse"`
-	Text           string   `xml:",chardata"`
-	Xmlns          string   `xml:"xmlns,attr"`
-	Xsi            string   `xml:"xsi,attr"`
-	SchemaLocation string   `xml:"schemaLocation,attr"`
-	Datasource     struct {
-		Text                string `xml:",chardata"`
-		CertificationNote   string `xml:"certificationNote,attr"`
-		ContentUrl          string `xml:"contentUrl,attr"`
-		CreatedAt           string `xml:"createdAt,attr"`
-		EncryptExtracts     string `xml:"encryptExtracts,attr"`
-		ID                  string `xml:"id,attr"`
-		IsCertified         string `xml:"isCertified,attr"`
-		Name                string `xml:"name,attr"`
-		Type                string `xml:"type,attr"`
-		UpdatedAt           string `xml:"updatedAt,attr"`
-		UseRemoteQueryAgent string `xml:"useRemoteQueryAgent,attr"`
-		WebpageUrl          string `xml:"webpageUrl,attr"`
-		Project             struct {
-			Text string `xml:",chardata"`
-			ID   string `xml:"id,attr"`
-			Name string `xml:"name,attr"`
-		} `xml:"project"`
-		Owner struct {
-			Text string `xml:",chardata"`
-			ID   string `xml:"id,attr"`
-		} `xml:"owner"`
-		Tags string `xml:"tags"`
-	} `xml:"datasource"`
-	Workbook struct {
-		Text            string `xml:",chardata"`
-		ID              string `xml:"id,attr"`
-		Name            string `xml:"name,attr"`
-		ContentUrl      string `xml:"contentUrl,attr"`
-		WebpageUrl      string `xml:"webpageUrl,attr"`
-		ShowTabs        string `xml:"showTabs,attr"`
-		Size            string `xml:"size,attr"`
-		CreatedAt       string `xml:"createdAt,attr"`
-		UpdatedAt       string `xml:"updatedAt,attr"`
-		EncryptExtracts string `xml:"encryptExtracts,attr"`
-		DefaultViewId   string `xml:"defaultViewId,attr"`
-		Project         struct {
-			Text string `xml:",chardata"`
-			ID   string `xml:"id,attr"`
-			Name string `xml:"name,attr"`
-		} `xml:"project"`
-		Owner struct {
-			Text string `xml:",chardata"`
-			ID   string `xml:"id,attr"`
-			Name string `xml:"name,attr"`
-		} `xml:"owner"`
-		Tags  string `xml:"tags"`
-		Views struct {
-			Text string `xml:",chardata"`
-			View []struct {
-				Text        string `xml:",chardata"`
-				ID          string `xml:"id,attr"`
-				Name        string `xml:"name,attr"`
-				ContentUrl  string `xml:"contentUrl,attr"`
-				CreatedAt   string `xml:"createdAt,attr"`
-				UpdatedAt   string `xml:"updatedAt,attr"`
-				ViewUrlName string `xml:"viewUrlName,attr"`
-				Tags        string `xml:"tags"`
-			} `xml:"view"`
-		} `xml:"views"`
-	} `xml:"workbook"`
-}
-
 type Connection struct {
 	ID            string `json:"id"`
 	Type          string `json:"type"`
@@ -155,7 +86,8 @@ type Connection struct {
 	ServerPort    string `json:"serverPort"`
 	UserName      string `json:"userName"`
 	DbName        string `json:"dbName"`
-	PassWord      string `json:"password"`
+	PassWord      string
+	Schema        string
 }
 
 type ConnectionFinder interface {
@@ -166,7 +98,7 @@ func (tabl *TabGo) ApiURL() string {
 	return fmt.Sprintf("%s/api/%s", tabl.ServerURL, tabl.ApiVersion)
 }
 
-// Signin signs in to a tableau site on the give Tablea.URL
+// Signin signs in to a tableau site on the give Tableau.URL
 // It remembers the current token and site ID for subsequent calls
 // cfr https://help.tableau.com/current/api/rest_api/en-us/REST/rest_api_concepts_auth.htm
 func (tabl *TabGo) Signin(username, password, siteName string) error {
@@ -306,6 +238,37 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string, targetConne
 			if err != nil {
 				return tsResponse, errors.Wrapf(err, "can not get ConnectionLines")
 			}
+
+			//namedConnections, err := NamedConnections(documentPath, namedConnectionsRe)
+			//if err != nil {
+			//	return tsResponse, errors.Wrapf(err, "can not get NamedConnections for '%s'", documentPath)
+			//}
+
+			// Write a temporary file in which the schema and connections and schema references have been replaced in the xml
+			// and upload this file.
+			// So no more need to pass connections in the payload? Yes, because we want the password to be embedded !
+
+			documentContent, err := ioutil.ReadFile(documentPath)
+			if err != nil {
+				return tsResponse, errors.Wrapf(err, "can not read file %s", documentPath)
+			}
+
+			connectionRE := regexp.MustCompile(`<connection [^>]*schema="([^"]]+)"[^>]*/>`)
+
+			matches := connectionRE.FindStringSubmatch(string(documentContent))
+
+			_ = matches
+
+			tmpFile, err := ioutil.TempFile("", fmt.Sprintf("*.%s", filepath.Ext(documentPath)))
+			if err != nil {
+				return tsResponse, errors.Wrapf(err, "can not create tmpfiles")
+			}
+			defer os.Remove(tmpFile.Name())
+			err = ioutil.WriteFile(tmpFile.Name(), documentContent, 0755)
+			if err != nil {
+				return tsResponse, errors.Wrapf(err, "")
+			}
+
 		}
 
 		tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true">%s<project id="%s"/></workbook></tsRequest>`, documentName, connections, projectID)
@@ -328,7 +291,7 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string, targetConne
 			return tsResponse, errors.Wrapf(err, "can not upload datasource")
 		}
 
-		datasourceId := tsResponse.Datasource.ID
+		datasourceId := string(tsResponse.Datasource.Id)
 
 		connections, err := tabl.DataSourceConnections(datasourceId)
 		if err != nil {

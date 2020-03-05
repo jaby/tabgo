@@ -3,6 +3,7 @@ module github.com/jaby/tabgo
 go 1.13
 
 require (
+	aqwari.net/xml v0.0.0-20190526204230-8dd125f7c15c
 	github.com/mitchellh/go-homedir v1.1.0
 	github.com/pelletier/go-toml v1.6.0 // indirect
 	github.com/pkg/errors v0.8.0
