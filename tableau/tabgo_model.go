@@ -200,6 +200,8 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string, targetConne
 		return tsResponse, errors.Wrapf(err, "can not compile regex")
 	}
 
+	var tmpFile *os.File
+
 	switch documentExtension {
 	case "twb", "twbx":
 		var connections string
@@ -234,15 +236,6 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string, targetConne
 			}
 
 		} else {
-			connections, err = ConnectionLinesXml(documentPath, tsResponse, captionRe, targetConnectionFinder)
-			if err != nil {
-				return tsResponse, errors.Wrapf(err, "can not get ConnectionLines")
-			}
-
-			//namedConnections, err := NamedConnections(documentPath, namedConnectionsRe)
-			//if err != nil {
-			//	return tsResponse, errors.Wrapf(err, "can not get NamedConnections for '%s'", documentPath)
-			//}
 
 			// Write a temporary file in which the schema and connections and schema references have been replaced in the xml
 			// and upload this file.
@@ -253,27 +246,72 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string, targetConne
 				return tsResponse, errors.Wrapf(err, "can not read file %s", documentPath)
 			}
 
-			connectionRE := regexp.MustCompile(`<connection [^>]*schema="([^"]]+)"[^>]*/>`)
+			connectionRE := regexp.MustCompile(`(?s)<named-connection [^>]*caption='([^']+)'[^>]*>.*<connection [^>]*schema=['"]([^']*)['"][^>]+/>.*</named-connection>`)
 
-			matches := connectionRE.FindStringSubmatch(string(documentContent))
+			matches := connectionRE.FindAllStringSubmatch(string(documentContent), -1)
 
-			_ = matches
+			for _, match := range matches {
+				caption := match[1]
 
-			tmpFile, err := ioutil.TempFile("", fmt.Sprintf("*.%s", filepath.Ext(documentPath)))
+				nc := NamedConnection{}
+				err = xml.Unmarshal([]byte(match[0]), &nc)
+				if err != nil {
+					return tsResponse, errors.Wrapf(err, "can not xml unmarshall '%s'", match[0])
+				}
+
+				targetConnection, err := targetConnectionFinder.FindConnection(caption)
+				if err != nil {
+					return tsResponse, errors.Wrapf(err, "can not find targetConnection for caption '%s'", caption)
+				}
+
+				nc.Text = ""
+				nc.Connection.Schema = targetConnection.Schema
+				nc.Connection.Server = targetConnection.ServerAddress
+				nc.Connection.Dbname = targetConnection.DbName
+				nc.Connection.Username = targetConnection.UserName
+
+				newNamedConnection, err := xml.MarshalIndent(nc, "", "  ")
+				if err != nil {
+					return tsResponse, errors.Wrapf(err, "can not find targetConnection for caption '%s'", caption)
+				}
+
+				documentContent = connectionRE.ReplaceAll(documentContent, newNamedConnection)
+
+				// replace all relations using this connection with the correct schema-prefix
+				relationRE := regexp.MustCompile(`(?s)<relation[^/]*connection=['"]([^'"]*)['"][^/]*table=['"]\[([^\]]*)\][^/]*/>`)
+				relationMatches := relationRE.FindAllStringSubmatch(string(documentContent), -1)
+
+				for _, relationMatch := range relationMatches {
+					if relationMatch[1] != nc.Name {
+						continue
+					}
+					targetRelation := strings.ReplaceAll(relationMatch[0], relationMatch[2], targetConnection.Schema)
+					documentContent = relationRE.ReplaceAll(documentContent, []byte(targetRelation))
+				}
+			}
+
+			tmpFile, err = ioutil.TempFile("", fmt.Sprintf("*%s", filepath.Ext(documentPath)))
 			if err != nil {
 				return tsResponse, errors.Wrapf(err, "can not create tmpfiles")
 			}
-			defer os.Remove(tmpFile.Name())
 			err = ioutil.WriteFile(tmpFile.Name(), documentContent, 0755)
 			if err != nil {
 				return tsResponse, errors.Wrapf(err, "")
 			}
 
+			connections, err = ConnectionLinesXml(documentPath, tsResponse, captionRe, targetConnectionFinder)
+			if err != nil {
+				return tsResponse, errors.Wrapf(err, "can not get ConnectionLines")
+			}
+		}
+
+		if tmpFile != nil {
+			defer os.Remove(tmpFile.Name())
 		}
 
 		tsRequest := fmt.Sprintf(`<tsRequest><workbook name="%s" showTabs="true">%s<project id="%s"/></workbook></tsRequest>`, documentName, connections, projectID)
 
-		return uploadFile("request_payload", "text/xml", tsRequest, "tableau_workbook", documentPath,
+		return uploadFile("request_payload", "text/xml", tsRequest, "tableau_workbook", tmpFile.Name(),
 			fmt.Sprintf("%s/sites/%s/workbooks?workbookType=%s&overwrite=true", tabl.ApiURL(), tabl.CurrentSiteID, documentExtension),
 			documentExtension,
 			tabl.CurrentToken)
@@ -298,7 +336,7 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string, targetConne
 			return tsResponse, errors.Wrapf(err, "can not get DataSourceConnections")
 		}
 
-		namedConnections, err := NamedConnections(documentPath, namedConnectionsRe)
+		namedConnections, err := GetNamedConnections(documentPath, namedConnectionsRe)
 		if err != nil {
 			return tsResponse, errors.Wrapf(err, "can not get NamedConnections for '%s'", documentPath)
 		}
@@ -354,7 +392,7 @@ func ConnectionLinesXml(documentPath string, tsResponse TsResponse, captionRe *r
 }
 
 // NamedConnections returns a map of Connections (as key) with the value being the caption of the named connection
-func NamedConnections(documentPath string, namedConnectionsRe *regexp.Regexp) (map[string]string, error) {
+func GetNamedConnections(documentPath string, namedConnectionsRe *regexp.Regexp) (map[string]string, error) {
 	namedConnections := make(map[string]string)
 	documentContent, err := ioutil.ReadFile(documentPath)
 	if err != nil {
@@ -362,33 +400,6 @@ func NamedConnections(documentPath string, namedConnectionsRe *regexp.Regexp) (m
 	}
 
 	matches := namedConnectionsRe.FindStringSubmatch(string(documentContent))
-
-	type NamedConnections struct {
-		XMLName         xml.Name `xml:"named-connections"`
-		Text            string   `xml:",chardata"`
-		NamedConnection []struct {
-			Text       string `xml:",chardata"`
-			Caption    string `xml:"caption,attr"`
-			Name       string `xml:"name,attr"`
-			Connection struct {
-				Text                 string `xml:",chardata"`
-				Authentication       string `xml:"authentication,attr"`
-				Class                string `xml:"class,attr"`
-				OneTimeSql           string `xml:"one-time-sql,attr"`
-				Port                 string `xml:"port,attr"`
-				Schema               string `xml:"schema,attr"`
-				Server               string `xml:"server,attr"`
-				ServerOauth          string `xml:"server-oauth,attr"`
-				Service              string `xml:"service,attr"`
-				Sslmode              string `xml:"sslmode,attr"`
-				Username             string `xml:"username,attr"`
-				WorkgroupAuthMode    string `xml:"workgroup-auth-mode,attr"`
-				Dbname               string `xml:"dbname,attr"`
-				MinimumDriverVersion string `xml:"minimum-driver-version,attr"`
-				OdbcNativeProtocol   string `xml:"odbc-native-protocol,attr"`
-			} `xml:"connection"`
-		} `xml:"named-connection"`
-	}
 
 	parsedNamedConnections := NamedConnections{}
 	err = xml.Unmarshal([]byte(matches[0]), &parsedNamedConnections)

@@ -113,7 +113,7 @@ type ConnectionType struct {
 	Password              string                    `xml:"password,attr,omitempty"`
 }
 
-// May be one of LockedToProject, ManagedByOwner
+// May be one of LockedToDatabase, ManagedByOwner
 type ContentPermissions string
 
 type DataAlertListType struct {
@@ -771,7 +771,7 @@ func (t *MetricType) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 // May be one of 15, 30
 type Minutes int
 
-// May be one of Asynchronous
+// May be one of Allow, Deny
 type Mode string
 
 type MonthDay string
@@ -1253,7 +1253,7 @@ type TsResponse struct {
 	GetIndexingStatus       IndexingStatusType          `xml:"http://tableau.com/api getIndexingStatus"`
 }
 
-// May be one of Extract, Subscription, ActiveDirectorySync, Flow
+// May be one of CountOfUsersAddedToGroup, CountOfUsersAddedToSite, CountOfUsersWithInsufficientLicenses, CountOfUsersInActiveDirectoryGroup, CountOfUsersProcessed, CountOfUsersSkipped, CountOfUsersInformationUpdated, CountOfUsersSiteRoleUpdated, CountOfUsersRemovedFromGroup, CountOfUsersUnlicensed
 type Type string
 
 // Must match the pattern https?://.+
