@@ -246,50 +246,64 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string, targetConne
 				return tsResponse, errors.Wrapf(err, "can not read file %s", documentPath)
 			}
 
-			connectionRE := regexp.MustCompile(`(?s)<named-connection [^>]*caption='([^']+)'[^>]*>.*<connection [^>]*schema=['"]([^']*)['"][^>]+/>.*</named-connection>`)
+			wb := Workbook{}
+			err = xml.Unmarshal(documentContent, &wb)
+			if err != nil {
+				return tsResponse, errors.Wrapf(err, "can not xml.Unmarshall  workbook %s", documentPath)
+			}
 
-			matches := connectionRE.FindAllStringSubmatch(string(documentContent), -1)
+			documentString := string(documentContent)
+			documentParts := []string{}
+			documentPos := 0
 
-			for _, match := range matches {
-				caption := match[1]
-
-				nc := NamedConnection{}
-				err = xml.Unmarshal([]byte(match[0]), &nc)
-				if err != nil {
-					return tsResponse, errors.Wrapf(err, "can not xml unmarshall '%s'", match[0])
-				}
-
-				targetConnection, err := targetConnectionFinder.FindConnection(caption)
-				if err != nil {
-					return tsResponse, errors.Wrapf(err, "can not find targetConnection for caption '%s'", caption)
-				}
-
-				nc.Text = ""
-				nc.Connection.Schema = targetConnection.Schema
-				nc.Connection.Server = targetConnection.ServerAddress
-				nc.Connection.Dbname = targetConnection.DbName
-				nc.Connection.Username = targetConnection.UserName
-
-				newNamedConnection, err := xml.MarshalIndent(nc, "", "  ")
-				if err != nil {
-					return tsResponse, errors.Wrapf(err, "can not find targetConnection for caption '%s'", caption)
-				}
-
-				documentContent = connectionRE.ReplaceAll(documentContent, newNamedConnection)
-
-				// replace all relations using this connection with the correct schema-prefix
-				relationRE := regexp.MustCompile(`(?s)<relation[^/]*connection=['"]([^'"]*)['"][^/]*table=['"]\[([^\]]*)\][^/]*/>`)
-				relationMatches := relationRE.FindAllStringSubmatch(string(documentContent), -1)
-
-				for _, relationMatch := range relationMatches {
-					if relationMatch[1] != nc.Name {
+			connectionSchema := make(map[string]string)
+			for _, ds := range wb.Datasources.Datasource {
+				for _, nc := range ds.Connection.NamedConnections.NamedConnection {
+					if nc.Caption == "" {
 						continue
 					}
-					targetRelation := strings.ReplaceAll(relationMatch[0], relationMatch[2], targetConnection.Schema)
-					documentContent = relationRE.ReplaceAll(documentContent, []byte(targetRelation))
+					targetConnection, err := targetConnectionFinder.FindConnection(nc.Caption)
+					if err != nil {
+						return tsResponse, errors.Wrapf(err, "can not find targetConnection for caption '%s'", nc.Caption)
+					}
+					if targetConnection.Schema != "" {
+						connectionSchema[nc.Name] = targetConnection.Schema
+					}
+
+					startNameConnectionRe := regexp.MustCompile(fmt.Sprintf(`(?s)<named-connection [^>]*name='%s`, nc.Name))
+
+					startPosition := startNameConnectionRe.FindStringIndex(documentString)
+					documentParts = append(documentParts, documentString[documentPos:startPosition[0]-1])
+					documentPos = startPosition[0]
+
+					endNameConnectionPos := strings.Index(documentString[documentPos:], "</named-connection>")
+					endNameConnectionPos += len("</named-connection>")
+					documentParts = append(documentParts, documentString[documentPos:documentPos+endNameConnectionPos])
+
+					newNamedConnection := strings.ReplaceAll(documentParts[len(documentParts)-1], fmt.Sprintf(`schema='%s'`, nc.Connection.Schema), fmt.Sprintf(`schema='%s'`, targetConnection.Schema))
+					newNamedConnection = strings.ReplaceAll(newNamedConnection, fmt.Sprintf(`server='%s'`, nc.Connection.Server), fmt.Sprintf(`server='%s'`, targetConnection.ServerAddress))
+					newNamedConnection = strings.ReplaceAll(newNamedConnection, fmt.Sprintf(`username='%s'`, nc.Connection.Username), fmt.Sprintf(`username='%s'`, targetConnection.UserName))
+					documentParts[len(documentParts)-1] = newNamedConnection
+					documentPos += endNameConnectionPos
+				}
+			}
+			documentParts = append(documentParts, documentString[documentPos+1:len(documentString)-1])
+
+			documentString = ""
+			for _, part := range documentParts {
+				documentString += part
+			}
+
+			for name, schema := range connectionSchema {
+				relationRE := regexp.MustCompile(fmt.Sprintf(`(?s)<relation[^/]*connection='%s'[^/]*table=['"]\[([^\]]*)\][^/]*/>`, name))
+				for _, relationMatches := range relationRE.FindAllStringSubmatch(documentString, -1) {
+					_ = relationMatches
+					newRelation := strings.ReplaceAll(relationMatches[0], relationMatches[1], schema)
+					documentString = strings.ReplaceAll(documentString, relationMatches[0], newRelation)
 				}
 			}
 
+			documentContent = []byte(documentString)
 			tmpFile, err = ioutil.TempFile("", fmt.Sprintf("*%s", filepath.Ext(documentPath)))
 			if err != nil {
 				return tsResponse, errors.Wrapf(err, "can not create tmpfiles")
@@ -703,4 +717,21 @@ func Unzip(src, dest string) error {
 	}
 
 	return nil
+}
+
+func ReplaceAllStringSubmatchFunc(re *regexp.Regexp, str string, repl func([]string) string) string {
+	result := ""
+	lastIndex := 0
+
+	for _, v := range re.FindAllSubmatchIndex([]byte(str), -1) {
+		groups := []string{}
+		for i := 0; i < len(v); i += 2 {
+			groups = append(groups, str[v[i]:v[i+1]])
+		}
+
+		result += str[lastIndex:v[0]] + repl(groups)
+		lastIndex = v[1]
+	}
+
+	return result + str[lastIndex:]
 }
