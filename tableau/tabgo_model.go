@@ -75,7 +75,7 @@ type Project struct {
 }
 
 type Projects struct {
-	Projects []Project `json:"project,omitempty" xml:"project,omitempty"`
+	Projects []ProjectType `json:"project,omitempty" xml:"project,omitempty"`
 }
 
 type Connection struct {
@@ -551,13 +551,79 @@ func (tabl *TabGo) GetProjectID(projectName string) (string, error) {
 		return projectID, errors.Wrapf(err, "can not json decode")
 	}
 
-	for _, project := range projectsHolder.Projects.Projects {
-		if project.Name == projectName {
-			return project.ID, nil
+	projectPath := strings.SplitN(projectName, "/", -1)
+	var parentId string
+	for pathIndex, pathPart := range projectPath {
+		for _, project := range projectsHolder.Projects.Projects {
+			if project.Name == pathPart {
+				if project.ParentProjectId == "" {
+					parentId = string(project.Id)
+					break
+				}
+				if parentId != "" && parentId == string(project.ParentProjectId) {
+					if pathIndex == len(projectPath)-1 {
+						// Yes, found it !
+						return string(project.Id), nil
+					}
+					// Since this is not the final match in the projectPath,
+					// we need to continue to descend..
+					// The new parent becomes this pathPart
+					parentId = string(project.Id)
+					break
+				}
+			}
 		}
 	}
 
-	return projectID, fmt.Errorf("project '%s' can not be found on this site", projectName)
+	// no project found,  so let's create it
+	projectID, err = tabl.CreateProject(parentId, projectPath[len(projectPath)-1])
+	if err != nil {
+		return projectID, errors.Wrapf(err, "can not create project %s (parentProject: %s)", projectPath, parentId)
+	}
+
+	return projectID, nil
+}
+
+func (tabl *TabGo) CreateProject(parentProjectID, projectName string) (string, error) {
+	projectID := ""
+
+	uri := fmt.Sprintf("%s/sites/%s/projects", tabl.ApiURL(), tabl.CurrentSiteID)
+	payload := fmt.Sprintf(`<tsRequest>
+	<project
+      parentProjectId="%s"
+	  name="%s"
+	  description="!%s.png!" />
+</tsRequest>`, parentProjectID, projectName, projectName)
+	req, err := http.NewRequest("POST", uri, strings.NewReader(payload))
+	if err != nil {
+		return projectID, errors.Wrapf(err, "can not post")
+	}
+	//req.Header.Set("Accept", "text/xml")
+	req.Header.Set("Content-Type", "text/xml")
+	req.Header.Set("X-tableau-auth", tabl.CurrentToken)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return projectID, errors.Wrapf(err, "can not client.Do(request) to create ProjectID from tableau")
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return projectID, errors.Wrapf(err, "can not read response body")
+	}
+
+	if strings.Contains(strings.ToLower(string(body)), "error") {
+		return projectID, fmt.Errorf("create project failed: %s", string(body))
+	}
+
+	var tsresponse TsResponse
+	err = xml.Unmarshal([]byte(body), &tsresponse)
+	if err != nil {
+		return projectID, errors.Wrapf(err, "can not xml unmarshall reponse '%s' ", body)
+	}
+	projectID = string(tsresponse.Project.Id)
+	return projectID, nil
 }
 
 func uploadFile(payloadFieldName, payloadContentType, payloadContent, fileFieldName, filePath, uri string, documentExtension string, tablToken string) (TsResponse, error) {
