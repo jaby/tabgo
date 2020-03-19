@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -287,7 +289,10 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string, targetConne
 					documentPos += endNameConnectionPos
 				}
 			}
-			documentParts = append(documentParts, documentString[documentPos+1:len(documentString)-1])
+			if documentPos > 0 {
+				documentPos += 1
+			}
+			documentParts = append(documentParts, documentString[documentPos:len(documentString)-1])
 
 			documentString = ""
 			for _, part := range documentParts {
@@ -373,11 +378,41 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string, targetConne
 			}
 		}
 
+		// Extract Data ?  Yes if we have a *.tds.json file in the same folder as the tds with ExtractDataSource = true
+		// Example documentConfig json: {"ExtractDataSourceData":true,"EncryptData":false}
+		documentConfigPath := documentConfigPath(documentPath)
+		if fileExists(documentConfigPath) {
+			jsonContent, err := ioutil.ReadFile(documentConfigPath)
+			if err != nil {
+				return tsResponse, errors.Wrapf(err, "can not read %s", documentConfigPath)
+			}
+			type DocumentConfig struct {
+				ExtractDataSourceData bool
+				EncryptData           bool
+			}
+			var documentConfig DocumentConfig
+
+			err = json.NewDecoder(bytes.NewReader(jsonContent)).Decode(&documentConfig)
+			if err != nil {
+				return tsResponse, errors.Wrapf(err, "can not json decode")
+			}
+			if documentConfig.ExtractDataSourceData {
+				err = tabl.ExtractDatasourceData(datasourceId, documentConfig.EncryptData)
+				if err != nil {
+					return tsResponse, errors.Wrapf(err, "can not extract data for datasource '%s'", documentName)
+				}
+			}
+		}
+
 		return tsResponse, nil
 	default:
 		return tsResponse, fmt.Errorf("invalid document extension '', expecting one of 'tds', 'tdsx', 'twb', 'twbx'")
 	}
 
+}
+
+func documentConfigPath(documentPath string) string {
+	return documentPath + ".json"
 }
 
 func ConnectionLinesXml(documentPath string, tsResponse TsResponse, captionRe *regexp.Regexp, targetConnectionFinder ConnectionFinder) (string, error) {
@@ -473,6 +508,38 @@ func (tabl *TabGo) EmbedDatasourceConnection(datasourceId string, connection Con
 	return nil
 }
 
+func (tabl *TabGo) ExtractDatasourceData(datasourceId string, encrypt bool) error {
+	connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s/createExtract?encrypt=%s", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId, strconv.FormatBool(encrypt))
+
+	req, err := http.NewRequest("POST", connectionURL, nil)
+	if err != nil {
+		return errors.Wrapf(err, "can not get")
+	}
+	//req.Header.Set("Accept", "text/xml")
+	req.Header.Set("Content-Type", "text/xml")
+	req.Header.Set("X-tableau-auth", tabl.CurrentToken)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return errors.Wrapf(err, "can not client.Do(request)")
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return errors.Wrapf(err, "can not read response body")
+	}
+
+	if strings.Contains(strings.ToLower(string(body)), "error") {
+		return fmt.Errorf("extract datasource data failed: %s", string(body))
+	}
+
+	if resp.StatusCode <= http.StatusOK || resp.StatusCode >= http.StatusIMUsed {
+		return fmt.Errorf("expected success-range response (2xx), but got %s: %s", resp.StatusCode, body)
+	}
+	log.Printf("Data for datasource %s extracted successfully (encrypted: %s)", datasourceId, strconv.FormatBool(encrypt))
+	return nil
+}
+
 func (tabl *TabGo) DataSourceConnections(datasourceId string) ([]Connection, error) {
 	dsConnections := []Connection{}
 	connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s/connections", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId)
@@ -557,6 +624,9 @@ func (tabl *TabGo) GetProjectID(projectName string) (string, error) {
 		for _, project := range projectsHolder.Projects.Projects {
 			if project.Name == pathPart {
 				if project.ParentProjectId == "" {
+					if len(projectPath) == 1 {
+						return string(project.Id), nil
+					}
 					parentId = string(project.Id)
 					break
 				}
