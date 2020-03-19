@@ -397,6 +397,11 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string, targetConne
 				return tsResponse, errors.Wrapf(err, "can not json decode")
 			}
 			if documentConfig.ExtractDataSourceData {
+				_ = tabl.DeleteExtractedDatasourceData(datasourceId)
+				//if err != nil {
+				//	return tsResponse, errors.Wrapf(err, "can not delete extracted data for datasource '%s'", documentName)
+				//}
+
 				err = tabl.ExtractDatasourceData(datasourceId, documentConfig.EncryptData)
 				if err != nil {
 					return tsResponse, errors.Wrapf(err, "can not extract data for datasource '%s'", documentName)
@@ -515,7 +520,6 @@ func (tabl *TabGo) ExtractDatasourceData(datasourceId string, encrypt bool) erro
 	if err != nil {
 		return errors.Wrapf(err, "can not get")
 	}
-	//req.Header.Set("Accept", "text/xml")
 	req.Header.Set("Content-Type", "text/xml")
 	req.Header.Set("X-tableau-auth", tabl.CurrentToken)
 
@@ -537,6 +541,37 @@ func (tabl *TabGo) ExtractDatasourceData(datasourceId string, encrypt bool) erro
 		return fmt.Errorf("expected success-range response (2xx), but got %s: %s", resp.StatusCode, body)
 	}
 	log.Printf("Data for datasource %s extracted successfully (encrypted: %s)", datasourceId, strconv.FormatBool(encrypt))
+	return nil
+}
+
+func (tabl *TabGo) DeleteExtractedDatasourceData(datasourceId string) error {
+	connectionURL := fmt.Sprintf("%s/sites/%s/datasources/%s/deleteExtract", tabl.ApiURL(), tabl.CurrentSiteID, datasourceId)
+
+	req, err := http.NewRequest("POST", connectionURL, nil)
+	if err != nil {
+		return errors.Wrapf(err, "can not get")
+	}
+	req.Header.Set("Content-Type", "text/xml")
+	req.Header.Set("X-tableau-auth", tabl.CurrentToken)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return errors.Wrapf(err, "can not client.Do(request)")
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return errors.Wrapf(err, "can not read response body")
+	}
+
+	if strings.Contains(strings.ToLower(string(body)), "error") {
+		return fmt.Errorf("delete extract failed: %s", string(body))
+	}
+
+	if resp.StatusCode <= http.StatusOK || resp.StatusCode >= http.StatusIMUsed {
+		return fmt.Errorf("expected success-range response (2xx), but got %s: %s", resp.StatusCode, body)
+	}
+	log.Printf("Delete extract for datasource %s", datasourceId)
 	return nil
 }
 
