@@ -185,6 +185,13 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string, targetConne
 
 	var tsResponse TsResponse
 	documentName, documentExtension := GetDocumentNameFromPath(documentPath)
+
+	// remove ~ at the beginning of the documentname
+	// we want the checked-out OraStudio documents, which are prefixed with ~, to be published to tableau without the tilde !
+	if strings.HasPrefix(documentName, "~") {
+		documentName = documentName[1:]
+	}
+
 	projectID, err := tabl.GetProjectID(projectName)
 	if err != nil {
 		return tsResponse, errors.Wrapf(err, "can not get project id")
