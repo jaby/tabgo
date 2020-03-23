@@ -24,10 +24,11 @@ import (
 
 // TabGo is the base implementation of the TableauApi command line in GoLang
 type TabGo struct {
-	ServerURL     string
-	ApiVersion    string
-	CurrentToken  string
-	CurrentSiteID string
+	ServerURL       string
+	ApiVersion      string
+	CurrentToken    string
+	CurrentSiteID   string
+	CurrentSiteName string
 }
 
 type CredentialHolder struct {
@@ -144,6 +145,7 @@ func (tabl *TabGo) Signin(username, password, siteName string) error {
 
 	tabl.CurrentToken = credentialHolder.Credentials.Token
 	tabl.CurrentSiteID = credentialHolder.Credentials.Site.ID
+	tabl.CurrentSiteName = siteName
 	return nil
 }
 
@@ -177,6 +179,7 @@ func (tabl *TabGo) Signout() error {
 
 	tabl.CurrentToken = ""
 	tabl.CurrentSiteID = ""
+	tabl.CurrentSiteName = ""
 	return nil
 }
 
@@ -312,6 +315,15 @@ func (tabl *TabGo) PublishDocument(documentPath, projectName string, targetConne
 					_ = relationMatches
 					newRelation := strings.ReplaceAll(relationMatches[0], relationMatches[1], schema)
 					documentString = strings.ReplaceAll(documentString, relationMatches[0], newRelation)
+				}
+			}
+
+			// replace site in repository-location
+			repositoryLocationRE := regexp.MustCompile(`(?s)<repository-location[^>]*site='([^']*)'`)
+			for _, repositoryLocationMatches := range repositoryLocationRE.FindAllStringSubmatch(documentString, -1) {
+				newRelation := strings.ReplaceAll(repositoryLocationMatches[0], repositoryLocationMatches[1], tabl.CurrentSiteName)
+				if repositoryLocationMatches[0] != newRelation {
+					documentString = strings.ReplaceAll(documentString, repositoryLocationMatches[0], newRelation)
 				}
 			}
 
